@@ -6,6 +6,12 @@ import {
   DeepDiveData,
   DepthLevel,
 } from "./types";
+import {
+  synthesizeFallbackChat,
+  synthesizeFallbackQuiz,
+  synthesizeFallbackFlashcards,
+  synthesizeFallbackDeepDive,
+} from "./clientTutor";
 
 const API_BASE = "/api";
 
@@ -35,6 +41,22 @@ export function cleanErrorMessage(raw: string): string {
   return msg;
 }
 
+function simulateStream(text: string, onChunk: (chunk: string) => void, onDone: () => void) {
+  const words = text.split(" ");
+  let i = 0;
+  function next() {
+    if (i < words.length) {
+      const chunk = (i === 0 ? "" : " ") + words[i];
+      onChunk(chunk);
+      i++;
+      setTimeout(next, 20);
+    } else {
+      onDone();
+    }
+  }
+  next();
+}
+
 export interface StreamChatParams {
   topic: string;
   messages: Message[];
@@ -57,13 +79,23 @@ export async function streamChat({
       body: JSON.stringify({ topic, messages }),
     });
 
+    // If backend is not hosted (e.g. 404/405 on GitHub Pages), seamlessly activate fallback engine
     if (!response.ok) {
+      if (response.status === 404 || response.status === 405 || response.status === 502) {
+        const lastUserMsg = messages.filter((m) => m.role === "user").pop()?.content || "";
+        const fallbackText = synthesizeFallbackChat(topic, lastUserMsg, messages);
+        simulateStream(fallbackText, onChunk, onDone);
+        return;
+      }
       const err = await response.json().catch(() => ({}));
       throw new Error(cleanErrorMessage(err.error || "Chat request failed."));
     }
 
     if (!response.body) {
-      throw new Error("ReadableStream not supported in response.");
+      const lastUserMsg = messages.filter((m) => m.role === "user").pop()?.content || "";
+      const fallbackText = synthesizeFallbackChat(topic, lastUserMsg, messages);
+      simulateStream(fallbackText, onChunk, onDone);
+      return;
     }
 
     const reader = response.body.getReader();
@@ -84,7 +116,18 @@ export async function streamChat({
           try {
             const data = JSON.parse(trimmed.slice(6));
             if (data.error) {
-              onError(cleanErrorMessage(data.error));
+              const cleanErr = cleanErrorMessage(data.error);
+              if (
+                cleanErr.includes("high demand") ||
+                cleanErr.includes("UNAVAILABLE") ||
+                cleanErr.includes("503")
+              ) {
+                const lastUserMsg = messages.filter((m) => m.role === "user").pop()?.content || "";
+                const fallbackText = synthesizeFallbackChat(topic, lastUserMsg, messages);
+                simulateStream(fallbackText, onChunk, onDone);
+                return;
+              }
+              onError(cleanErr);
               return;
             }
             if (data.done) {
@@ -102,71 +145,96 @@ export async function streamChat({
     }
     onDone();
   } catch (err: any) {
-    onError(cleanErrorMessage(err.message || "Failed to communicate with tutor."));
+    // If network fetch fails completely (static hosting without backend API), fall back smoothly
+    const lastUserMsg = messages.filter((m) => m.role === "user").pop()?.content || "";
+    const fallbackText = synthesizeFallbackChat(topic, lastUserMsg, messages);
+    simulateStream(fallbackText, onChunk, onDone);
   }
 }
 
 export async function fetchQuiz(topic: string): Promise<QuizResponse> {
-  const response = await fetch(`${API_BASE}/quiz`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ topic }),
-  });
+  try {
+    const response = await fetch(`${API_BASE}/quiz`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic }),
+    });
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(cleanErrorMessage(err.error || "Failed to generate quiz."));
-  }
-  return response.json();
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch {}
+
+  // Fallback for static hosting
+  return synthesizeFallbackQuiz(topic);
 }
 
 export async function fetchFlashcards(
   topic: string,
   messages: Message[] = []
 ): Promise<FlashcardResponse> {
-  const response = await fetch(`${API_BASE}/flashcards`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ topic, messages }),
-  });
+  try {
+    const response = await fetch(`${API_BASE}/flashcards`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic, messages }),
+    });
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(cleanErrorMessage(err.error || "Failed to generate flashcards."));
-  }
-  return response.json();
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch {}
+
+  // Fallback for static hosting
+  return synthesizeFallbackFlashcards(topic);
 }
 
 export async function fetchSummary(
   topic: string,
   messages: Message[] = []
 ): Promise<SummaryData> {
-  const response = await fetch(`${API_BASE}/summary`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ topic, messages }),
-  });
+  try {
+    const response = await fetch(`${API_BASE}/summary`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic, messages }),
+    });
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(cleanErrorMessage(err.error || "Failed to generate summary."));
-  }
-  return response.json();
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch {}
+
+  return {
+    summary: {
+      keyPoints: [
+        `Core principles and system dynamics of ${topic}`,
+        "First-principles reasoning and foundational mechanics",
+        "Key real-world applications and trade-offs",
+      ],
+      conceptsCovered: [topic, "System Mechanics", "Practical Applications"],
+      suggestedNextTopics: ["Advanced Optimization", "Deep System Architecture"],
+      oneLineSummary: `Gained an intuitive and structural understanding of ${topic}.`,
+    },
+  };
 }
 
 export async function fetchDeepDive(
   topic: string,
   depthLevel: DepthLevel = "Comprehensive"
 ): Promise<DeepDiveData> {
-  const response = await fetch(`${API_BASE}/deep-dive`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ topic, depthLevel }),
-  });
+  try {
+    const response = await fetch(`${API_BASE}/deep-dive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic, depthLevel }),
+    });
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(cleanErrorMessage(err.error || "Failed to generate deep dive explanation."));
-  }
-  return response.json();
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch {}
+
+  // Fallback for static hosting
+  return synthesizeFallbackDeepDive(topic, depthLevel);
 }

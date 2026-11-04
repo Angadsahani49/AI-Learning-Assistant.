@@ -56,6 +56,9 @@ function extractErrorMessage(err: any): string {
   if (msg.includes("RESOURCE_EXHAUSTED") || msg.includes("429")) {
     return "API rate limit reached. Please wait a moment and try again.";
   }
+  if (msg.includes("503") || msg.includes("UNAVAILABLE") || msg.includes("high demand")) {
+    return "This model is currently experiencing high demand. Please try again in a few moments.";
+  }
   return msg;
 }
 
