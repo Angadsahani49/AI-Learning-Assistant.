@@ -17,6 +17,17 @@
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.5.0/dist/tabler-icons.min.css"
     />
+    <script>
+      // Ensure trailing slash on GitHub Pages so relative assets resolve properly
+      if (
+        window.location.hostname.endsWith('github.io') &&
+        window.location.pathname &&
+        !window.location.pathname.endsWith('/') &&
+        !window.location.pathname.includes('.')
+      ) {
+        window.location.replace(window.location.pathname + '/' + window.location.search + window.location.hash);
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
